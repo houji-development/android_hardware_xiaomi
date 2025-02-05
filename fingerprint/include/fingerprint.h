@@ -23,6 +23,10 @@ typedef enum fingerprint_msg_type {
     FINGERPRINT_TEMPLATE_REMOVED = 4,
     FINGERPRINT_AUTHENTICATED = 5,
     FINGERPRINT_TEMPLATE_ENUMERATING = 6,
+    FINGERPRINT_CHALLENGE_GENERATED = 7,
+    FINGERPRINT_CHALLENGE_REVOKED = 8,
+    FINGERPRINT_AUTHENTICATOR_ID_RETRIEVED = 9,
+    FINGERPRINT_AUTHENTICATOR_ID_INVALIDATED = 10,
 } fingerprint_msg_type_t;
 
 /*
@@ -68,12 +72,11 @@ typedef enum fingerprint_acquired_info {
 } fingerprint_acquired_info_t;
 
 typedef struct fingerprint_finger_id {
-    uint32_t gid;
     uint32_t fid;
 } fingerprint_finger_id_t;
 
 typedef struct fingerprint_enroll {
-    fingerprint_finger_id_t finger;
+    uint32_t fid;
     /* samples_remaining goes from N (no data collected, but N scans needed)
      * to 0 (no more data is needed to build a template). */
     uint32_t samples_remaining;
@@ -81,7 +84,7 @@ typedef struct fingerprint_enroll {
 } fingerprint_enroll_t;
 
 typedef struct fingerprint_iterator {
-    fingerprint_finger_id_t finger;
+    uint32_t fid;
     uint32_t remaining_templates;
 } fingerprint_iterator_t;
 
@@ -97,6 +100,10 @@ typedef struct fingerprint_authenticated {
     hw_auth_token_t hat;
 } fingerprint_authenticated_t;
 
+typedef struct fingerprint_vendor_extend {
+    int64_t data;
+} fingerprint_vendor_extend_t;
+
 typedef struct fingerprint_msg {
     fingerprint_msg_type_t type;
     union {
@@ -106,6 +113,7 @@ typedef struct fingerprint_msg {
         fingerprint_removed_t removed;
         fingerprint_acquired_t acquired;
         fingerprint_authenticated_t authenticated;
+        fingerprint_vendor_extend_t extend;
     } data;
 } fingerprint_msg_t;
 
@@ -149,7 +157,17 @@ typedef struct fingerprint_device {
      * Function return: 0 if function failed
      *                  otherwise, a uint64_t of token
      */
-    uint64_t (*pre_enroll)(struct fingerprint_device* dev);
+    uint64_t (*generate_challenge)(struct fingerprint_device* dev);
+    
+    /*
+     * Finishes the enroll operation and invalidates the pre_enroll() generated challenge.
+     * This will be called at the end of a multi-finger enrollment session to indicate
+     * that no more fingers will be added.
+     *
+     * Function return: 0 if the request is accepted
+     *                  or a negative number in case of error, generally from the errno.h set.
+     */
+    int (*revoke_challenge)(struct fingerprint_device* dev, uint64_t challenge);
 
     /*
      * Fingerprint enroll request:
@@ -165,19 +183,7 @@ typedef struct fingerprint_device {
      *                  or a negative number in case of error, generally from the errno.h set.
      *                  A notify() function may be called indicating the error condition.
      */
-    int (*enroll)(struct fingerprint_device* dev, const hw_auth_token_t* hat, uint32_t gid,
-                  uint32_t timeout_sec);
-
-    /*
-     * Finishes the enroll operation and invalidates the pre_enroll() generated challenge.
-     * This will be called at the end of a multi-finger enrollment session to indicate
-     * that no more fingers will be added.
-     *
-     * Function return: 0 if the request is accepted
-     *                  or a negative number in case of error, generally from the errno.h set.
-     */
-    int (*post_enroll)(struct fingerprint_device* dev);
-
+    int (*enroll)(struct fingerprint_device* dev, const hw_auth_token_t* hat);
     /*
      * get_authenticator_id:
      * Returns a token associated with the current fingerprint set. This value will
@@ -187,6 +193,9 @@ typedef struct fingerprint_device {
      * Function return: current authenticator id or 0 if function failed.
      */
     uint64_t (*get_authenticator_id)(struct fingerprint_device* dev);
+
+    // Added by vendor HAL
+    uint64_t (*invalidate_authenticator_id)(struct fingerprint_device* dev);
 
     /*
      * Cancel pending enroll or authenticate, sending FINGERPRINT_ERROR_CANCELED
@@ -229,7 +238,7 @@ typedef struct fingerprint_device {
      * Function return: 0 if fingerprint template(s) can be successfully deleted
      *                  or a negative number in case of error, generally from the errno.h set.
      */
-    int (*remove)(struct fingerprint_device* dev, uint32_t gid, uint32_t fid);
+    int (*remove)(struct fingerprint_device* dev, const int32_t *fids, uint32_t count);
 
     /*
      * Restricts the HAL operation to a set of fingerprints belonging to a
@@ -240,7 +249,8 @@ typedef struct fingerprint_device {
      * Function return: 0 on success
      *                  or a negative number in case of error, generally from the errno.h set.
      */
-    int (*set_active_group)(struct fingerprint_device* dev, uint32_t gid, const char* store_path);
+    int (*set_active_group)(struct fingerprint_device* dev, uint32_t gid,
+                            const char *store_path);
 
     /*
      * Authenticates an operation identifed by operation_id
@@ -248,12 +258,17 @@ typedef struct fingerprint_device {
      * Function return: 0 on success
      *                  or a negative number in case of error, generally from the errno.h set.
      */
-    int (*authenticate)(struct fingerprint_device* dev, uint64_t operation_id, uint32_t gid);
+    int (*authenticate)(struct fingerprint_device* dev, uint64_t operation_id);
+
+    /*
+    * Added by Xiaomi (currently broken)
+    */
+    int (*reset_lockout)(struct fingerprint_device* dev, const hw_auth_token_t* hat);
 
     /*
      * Xiaomi fingerprint extension command.
      */
-    int (*extCmd)(struct fingerprint_device* dev, int32_t cmd, int32_t param);
+    int (*goodixExtCmd)(struct fingerprint_device* dev, int32_t cmd, int32_t param);
 
     /* Reserved for backward binary compatibility */
     void* reserved[4];
